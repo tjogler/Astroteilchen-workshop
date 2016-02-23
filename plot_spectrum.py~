@@ -1,0 +1,153 @@
+#!/usr/bin/env python
+import os,sys,glob
+import argparse
+import utillities as ut
+import SEDfitter as sed
+import specShapes as spsh
+from matplotlib import pyplot as plt
+from matplotlib import rc
+import numpy as np
+import testsed
+import fitter
+import constants as const
+
+
+
+def run_sedfitter(inputfile,collumns,ispec,ipara,iprocess,erange,distance,size,shape,shellth,age,crosspath,testrun,testerror,config,confpath):
+    #print crosspath
+    print ipara,type(ipara)
+    if ipara!=[]:
+        ipara=ut.argparse_list_of_list_conv(ipara)
+    else:
+        fn=open(confpath)
+        confDict=eval(fn.read())
+        specname=[]
+        counter=0
+        for p in iprocess:
+            specname.append('%s_%s_%i'%(iprocess[counter],ispec[counter],counter))
+            counter+=1
+        print 'spectra: ',specname
+        ipara=ut.conv_dict2list(specname,['a','b','c','d','e','f','g','h'],confDict)
+        print 'parameters retrieved from config files:'
+        print ipara
+        print '\n'
+    if erange!=[]:
+        erange=ut.argparse_list_of_list_conv(erange)
+    else:
+        for p in iprocess:
+            erange.append([1e6,1e15])
+
+
+    Fitroutine=sed.SEDfitter(data,ispec,ipara,erange,iprocess,sed.source(),crosspath)
+    '''SNR specific setting of source parameters'''
+    '''W51C'''
+    Fitroutine.set_source(distance,size,age,shape,shellth)
+    Fitroutine.source.set_radiation_photons(-7.,2.,0.05)
+    Fitroutine.set_im(10,0,150)
+    Fitroutine.source.set_radiation_densities(0.25,0.84,3.0e-3,0.9)
+    
+    modelSpec=Fitroutine.get_model_func()[0]
+    modelval=modelSpec(ipara[0])
+    
+    def pp2T_func(ppFunc,MParticle):
+       # newfunc=np.sqrt((ppFunc*const.C)**2+MParticle**2*const.C**4)-MParticle*const.C**2
+        newfunc=np.sqrt(ppFunc**2+MParticle**2)#-MParticle
+        return newfunc
+    
+    def dp2dT_func(ppFunc,MParticle,p):
+        newfunc=ppFunc/((np.sqrt(p**2+MParticle**2)*p-MParticle**2))
+        return newfunc
+
+    
+    protonPVal=Fitroutine.parentspec[0].get_xvals()
+    protonEnergy=Fitroutine.parentspec[0].get_xvals()
+    protonSpecVal=dp2dT_func(Fitroutine.parentspec[0].value(),const.ME_GeV*1.e3,protonPVal)
+
+    finalPar,finalParError,finalChi2,finalVal,func,fineGamma,xFineGamma=Fitroutine.fit(config)
+    
+    #print 'type func: ',type(func),func
+    
+    if testrun:
+        print 'simulation parameter: ',apara
+
+    '''
+    Prepare the plotting of the data and the fit functions
+    in a pretty way
+    '''
+
+    xvals=[]
+    yvals=[]
+    yerrors=[]
+    yerrflaq=[]
+    tags=['Fermi/LAT','MAGIC']
+    counter=0
+    Fscale=const.MeV2erg
+    for p in iprocess:
+       ''' if p =="pp_wos":
+            tags.append('pp $\chi^2:$ %.1f'%(finalChi2[counter]))
+        else: '''   
+       tags.append('%s $\chi^2:$ %.1f'%(p,finalChi2[counter]))
+       counter+=1
+        
+    #tags=['Fermi/LAT','MAGIC','%s $\chi^2:$ %.1f'%(finalChi2[0]),'Brems $\chi^2:$ %.1f'%(finalChi2[1]),'IC $\chi^2:$ %.1f'%(finalChi2[2])]
+    counter=0
+    for i in range(len(metadata)/4):
+        xvals.append(metadata[counter])
+        yvals.append(metadata[counter+1]*Fscale)
+        yerrors.append(metadata[counter+3]*Fscale)
+        yerrflaq.append(1)
+        counter+=4
+    for f in fineGamma:
+        if type(f)==list:# required for secondaries in pp process
+            for ff in f:
+                yvals.append(ff*Fscale)
+                tags.append('sub')
+                yerrflaq.append(0)
+        else:    
+            yvals.append(f*Fscale)
+            yerrflaq.append(0)
+    for xf in xFineGamma:
+        if type(xf)==list:# required for secondaries in pp process
+            for xxf in xf:
+                tags.append('sub')
+                xvals.append(xxf)
+        else:    
+            xvals.append(xf)
+
+    if len(xvals)!= len(yvals):
+        print 'ERROR: number of x arrays not equal to y arrays'
+        exit()
+
+    tags.append('pp only')
+    tags.append('sec brems')
+    tags.append('sec IC')
+    
+    #print xvals,yvals
+    #print len(xvals),len(yvals),len(yerrflaq),len(tags)
+
+    fig=ut.plot(xvals,yvals,yerrors,yerrflaq,tags,res=False,onlybands=False,forceLog=True,ytitle=r'E$^{2}$ dN/dE [erg $\mathrm{cm}^{-2} \mathrm{ s}^{-1}$]')
+    fig.show()
+
+
+    plt.figure()
+  
+    var=raw_input("Press enter to exit")
+
+parser=argparse.ArgumentParser()
+parser.add_argument("--infile",help="file or @filelist containing all input data files",type=str,nargs='+')
+parser.add_argument("--columns",help="provide a list for each input file that cspecify the columns to extract the data [x,y,erxup,erxdoen,eryup,erydown] -1 means not there",type=int,nargs='+',default=[1,4,2,-1,5,-1])
+parser.add_argument("--spec",help="provide a list for the spectral shape of each process that should be fitted default is pl, possible is pl,bpl,sbpl,plcut",type=str,nargs='+')
+parser.add_argument("--par",help="provide a list of initial parameters in the form 'p1 ..pn' for each process to be fitted",type=str,nargs='+',default=[])
+parser.add_argument("--proc",help="provide a list of process to be fitted possible: pp,IC,synch,brems",type=str,nargs='+')
+parser.add_argument("--erange",help="provide a list of 'emin emax' for each parent particle population (process)",type=str,nargs='+',default=[])
+parser.add_argument("--dist",help="distance in pc to the source, default= 2000",type=float,default=2000.)
+parser.add_argument("--size",help="provide angluar size of the source in arcsec; default=30",type=float,default=30.)
+parser.add_argument("--sourceshape",help="source shape, supported are 'shell' and 'sphere';default = sphere",type=str,default='sphere')
+parser.add_argument("--shell",help="provide thickness of shell in pc; default=0.01",type=float,default=0.01)
+parser.add_argument("--crpath",help="path where table with pp crossection is saved",type=str,default='./pp_data/')
+parser.add_argument("--test",action="store_true",help="this option is for testing purposes only it will disable the data file reading and instead create dummy test data from the spectral shape and parameter you provided, this data will be whiggled with gaussian error of size provided with --testerror; default=False", default=False)
+parser.add_argument("--age",help="age of the source, default 30 ky",type=float,default=3.e4)
+args=parser.parse_args()
+run_sedfitter(args.infile,args.columns,args.spec,args.par,args.proc,args.erange,args.dist,args.size,args.sourceshape,args.shell,args.age,args.crpath)
+    
+    
