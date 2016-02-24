@@ -3,7 +3,7 @@ import os,sys,glob
 import argparse
 import utillities as ut
 import specShapes as spsh
-import SEDfitter as sed
+import sedObj as sed
 from matplotlib import pyplot as plt
 from matplotlib import rc
 import numpy as np
